@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>SpendCents</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+    }
+    #container {
+      padding: 20px;
+      max-width: 420px;
+      margin: auto;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #climateBox {
+      background: white;
+      padding: 18px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      font-size: 15px;
+      line-height: 1.4;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.1);
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      margin-top: 12px;
+      background: #4c7df0;
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    /* Modal */
+    #modalOverlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(0,0,0,0.45);
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+    #modalBox {
+      background: white;
+      padding: 20px;
+      width: 85%;
+      max-width: 380px;
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    }
+    #modalTitle {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+    #modalCloseBtn {
+      margin-top: 16px;
+      background: #333;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="container">
+    <h1>SpendCents</h1>
+
+    <div id="climateBox">
+      <strong>Today's Spending:</strong><br>
+      $0.00 so far. You are pacing yourself well.
+    </div>
+
+    <button id="addPurchaseBtn">Add Purchase</button>
+    <button id="canIBuyBtn">Can I Buy This?</button>
+    <button id="historyBtn">View Purchases</button>
+    <button id="vibeBtn" style="background:#555;">Vibe: Balanced</button>
+  </div>
+
+  <!-- Modal -->
+  <div id="modalOverlay">
+    <div id="modalBox">
+      <div id="modalTitle"></div>
+      <div id="modalContent"></div>
+      <button id="modalCloseBtn">Close</button>
+    </div>
+  </div>
+
+<script>
+/* ============================================
+   GLOBAL STATE
+============================================ */
+let purchases = JSON.parse(localStorage.getItem("purchases") || "[]");
+let vibe = localStorage.getItem("vibe") || "Balanced";
+
+/* Income and essentials, if you used them in the older prototype.
+   Fallbacks keep the app working even if nothing is set. */
+let income = JSON.parse(localStorage.getItem("income") || "75000");     // yearly
+let essentials = JSON.parse(localStorage.getItem("essentials") || "2500"); // monthly
+
+/* ============================================
+   CLOUDLFARE WORKER CALL
+============================================ */
+const WORKER_URL = "https://spendcents-ai.w1419143.workers.dev/"; 
+
+async function callAI(promptText) {
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: promptText })
+    });
+    const data = await res.json();
+    return data.reply || "(AI unavailable)";
+  } catch (err) {
+    console.error(err);
+    return "(AI error)";
+  }
+}
+
+/* ============================================
+   MODAL SYSTEM
+============================================ */
+const modalOverlay = document.getElementById("modalOverlay");
+const modalTitle = document.getElementById("modalTitle");
+const modalContent = document.getElementById("modalContent");
+const modalCloseBtn = document.getElementById("modalCloseBtn");
+
+function openModal(title, html) {
+  modalTitle.textContent = title;
+  modalContent.innerHTML = html;
+  modalOverlay.style.display = "flex";
+}
+function closeModal() {
+  modalOverlay.style.display = "none";
+}
+modalCloseBtn.onclick = closeModal;
+modalOverlay.onclick = (e) => {
+  if (e.target === modalOverlay) closeModal();
+};
+
+/* ============================================
+   DAILY SUMMARY
+============================================ */
+function updateClimateBox() {
+  const today = new Date().toISOString().slice(0,10);
+  const spentToday = purchases
+    .filter(p => p.date.startsWith(today))
+    .reduce((s,p) => s + p.amount, 0);
+
+  document.getElementById("climateBox").innerHTML =
+    `<strong>Today's Spending:</strong><br>
+     $${spentToday.toFixed(2)} so far. 
+     ${spentToday < 40 ? "You are pacing yourself well." : "Stay mindful today."}`;
+}
+updateClimateBox();
+
+/* ============================================
+   ADD PURCHASE
+============================================ */
+document.getElementById("addPurchaseBtn").onclick = () => {
+  const html = `
+    <p>Amount ($)</p>
+    <input id="pAmount" type="number" min="0" step="0.01"
+      style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;">
+
+    <p>Category</p>
+    <input id="pCat" type="text"
+      style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;">
+
+    <button id="savePurchase">Save</button>
+  `;
+
+  openModal("Add Purchase", html);
+
+  setTimeout(() => {
+    document.getElementById("savePurchase").onclick = () => {
+      const amt = parseFloat(document.getElementById("pAmount").value);
+      const cat = document.getElementById("pCat").value.trim() || "uncategorized";
+
+      if (!amt || amt <= 0) {
+        alert("Enter a valid amount.");
+        return;
+      }
+
+      purchases.push({
+        amount: amt,
+        category: cat,
+        date: new Date().toISOString()
+      });
+
+      localStorage.setItem("purchases", JSON.stringify(purchases));
+      closeModal();
+      updateClimateBox();
+    };
+  }, 0);
+};
+
+/* ============================================
+   VIEW PURCHASE HISTORY
+============================================ */
+document.getElementById("historyBtn").onclick = () => {
+  if (purchases.length === 0) {
+    openModal("Purchases", "<i>No purchases logged yet.</i>");
+    return;
+  }
+
+  let html = `<div style="max-height:300px;overflow-y:auto;">`;
+  purchases.forEach(p => {
+    html += `
+      <div style="padding:10px 0;border-bottom:1px solid #ddd;">
+        <strong>$${p.amount.toFixed(2)}</strong> — ${p.category}<br>
+        <span style="font-size:12px;color:#777;">
+          ${new Date(p.date).toLocaleString()}
+        </span>
+      </div>
+    `;
+  });
+  html += `</div>`;
+
+  openModal("Purchase History", html);
+};
+
+/* ============================================
+   VIBE TOGGLE
+============================================ */
+const vibeBtn = document.getElementById("vibeBtn");
+vibeBtn.textContent = "Vibe: " + vibe;
+
+vibeBtn.onclick = () => {
+  vibe = (vibe === "Balanced") ? "Thrifty" : "Balanced";
+  localStorage.setItem("vibe", vibe);
+  vibeBtn.textContent = "Vibe: " + vibe;
+};
+
+/* ============================================
+   CAN I BUY THIS - BASELINE + AI
+============================================ */
+document.getElementById("canIBuyBtn").onclick = () => {
+  const html = `
+    <p>Item</p>
+    <input id="ciName" type="text"
+      style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;">
+
+    <p>Price ($)</p>
+    <input id="ciPrice" type="number" min="0" step="0.01"
+      style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;">
+
+    <button id="ciCheck">Check</button>
+  `;
+
+  openModal("Can I Buy This?", html);
+
+  setTimeout(() => {
+    document.getElementById("ciCheck").onclick = async () => {
+      const name = document.getElementById("ciName").value.trim();
+      const price = parseFloat(document.getElementById("ciPrice").value);
+
+      if (!name || !price || price <= 0) {
+        alert("Enter a valid item and price.");
+        return;
+      }
+
+      const today = new Date().toISOString().slice(0,10);
+      const spentToday = purchases
+        .filter(p => p.date.startsWith(today))
+        .reduce((s,p) => s + p.amount, 0);
+
+      /* ----- Budget based baseline ----- */
+
+      const yearlyIncome = Number(income) || 75000;
+      const monthlyEssentials = Number(essentials) || 2500;
+
+      const monthlyIncome = yearlyIncome / 12;
+      const discretionary = Math.max(monthlyIncome - monthlyEssentials, 0);
+      let dailyBudget = discretionary / 30;
+
+      if (!dailyBudget || !isFinite(dailyBudget)) {
+        dailyBudget = 50; // hard fallback
+      }
+
+      let baseline;
+
+      // Small purchase exception, as long as you are not wildly over budget
+      if (price <= 5 && spentToday + price < dailyBudget * 1.8) {
+        baseline = `${name} is a small treat. It is fine to buy it today.`;
+      }
+      else if (spentToday + price < dailyBudget * 0.7) {
+        baseline = `Buying ${name} looks totally fine today.`;
+      }
+      else if (spentToday + price < dailyBudget * 1.2) {
+        baseline = `You can buy ${name}, but you are getting close to today's comfort range.`;
+      }
+      else {
+        baseline = `${name} might stretch your comfort today. It may be better to wait.`;
+      }
+
+      /* ----- AI prompt, aligned with baseline ----- */
+
+      const prompt = `
+You are SpendCents, a friendly yet practical financial advisor.
+
+BASELINE JUDGMENT:
+"${baseline}"
+
+RULES FOR YOUR RESPONSE:
+1. Do not contradict the baseline judgment.
+2. If the baseline says to wait or avoid buying, reinforce that decision.
+3. If the baseline says it is fine, you can encourage but stay grounded.
+4. Keep it short - two or three sentences.
+5. Do not repeat exact dollar amounts.
+6. Adjust tone to match the user's vibe: ${vibe}.
+7. Never be overly optimistic if the baseline is cautious.
+
+User context:
+- Today's total spending: ${spentToday.toFixed(2)}
+- Daily discretionary budget estimate: ${dailyBudget.toFixed(2)}
+- Item they want to buy: "${name}"
+      `.trim();
+
+      openModal("Advisor Suggestion", "Thinking...");
+
+      const aiReply = await callAI(prompt);
+
+      const finalHtml = `
+        <p><strong>Baseline:</strong> ${baseline}</p>
+        <hr>
+        <p><strong>AI Advisor:</strong><br>${aiReply}</p>
+      `;
+
+      openModal("Advisor Suggestion", finalHtml);
+    };
+  }, 0);
+};
+</script>
+
+</body>
+</html>
